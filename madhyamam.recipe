@@ -1,0 +1,127 @@
+#!/usr/bin/env python2
+import string, re
+from calibre import strftime
+from calibre.web.feeds.recipes import BasicNewsRecipe
+from calibre.ebooks.BeautifulSoup import BeautifulSoup
+from lxml import html, etree
+from urllib2 import urlopen
+from datetime import datetime, timedelta
+
+class MadhyamamCust(BasicNewsRecipe):
+    '''
+    TODO
+    2) Include image
+    4) Add more feeds
+    7) Test from Kindle
+    8) Change font size
+    9) Reduce image size - 60% - 40%
+    10) Get pages apart from 1
+    11) Set oldest_article to work properly
+    '''
+
+    title       = 'Madhyamam'
+    __author__  = 'Masoud A R'
+    description = 'Daily news from the Madhyamam'
+    tags = 'news, sport, blog'
+    publisher = 'Madhyamam'
+    publication_type = 'newspaper'
+    timefmt = '[%a, %d %b, %Y]'
+    article_timefmt = '%d/%m/%Y %H:%M'      # a hack to restrict by oldest_article
+    language = 'ml'
+
+    # recipe settings
+    oldest_article = 2 # in days
+    #max_articles_per_feed = 15
+    simultaneous_downloads = 35
+
+    ignore_duplicate_articles = {'title', 'url'}
+
+    remove_tags    = [dict(name='div', attrs={'class':'col-md-12 bx social-media'})     # social media
+        , dict(name='div', attrs={'id':'zt_28354_1'})                                   # ads
+        , dict(name='div', attrs={'id':'related_news'})                                 # related news
+        , dict(name='div', attrs={'class':'col-lg-12 col-md-12 col-sm-12 widget ad-widget'})    # more ads
+        , dict(name='div', attrs={'class':'col-lg-12 col-md-12 col-sm-12 nav-story'})           # Previous and Next
+        , dict(name='div', attrs={'class':'col-md-3 col-lg-pull-9 left-panel'})         # Print and Tags
+    ]
+    keep_tags = [dict(name='div', attrs={'class':'col-lg-12 img img-main'})         # main image
+        , dict(name='div', attrs={'class':'img'})                                   # other images
+    ]
+    #auto_cleanup_keep = '//div[@class="col-lg-12 img img-main "]' # will keep all divs with id="article-image"   col-lg-12 img img-main 
+    #use_embedded_content = True
+    #encoding = 'cp1252'
+    no_stylesheets = True
+    #extra_css = 'h1 {font: sans-serif large;}\n.byline {font:monospace;}'
+
+    indexURLs          = [
+        ('Kerala', 'https://www.madhyamam.com/kerala', ['col-xs-12', 'col-lg-12 col-md-12 col-sm-12 col-xs-8']),
+        ('India', 'https://www.madhyamam.com/india', ['col-xs-12', 'col-lg-12 col-md-12 col-sm-12 col-xs-8']),  # col-lg-12 col-md-12 col-sm-12 col-xs-8
+        ('Kochi', 'https://www.madhyamam.com/kerala/local-news/kochi', ['col-lg-8', 'col-md-9']),
+        ('Middle East', 'https://www.madhyamam.com/gulf', ['col-lg-12 hd-outer', 'col-xs-12']),
+        ('Qatar', 'https://www.madhyamam.com/gulf-news/qatar', ['col-xs-12', 'col-lg-12 col-md-12 col-sm-12 col-xs-10']),
+        ('World', 'https://www.madhyamam.com/world', ['col-lg-12 hd-outer', 'col-lg-12 col-md-12 col-sm-12 col-xs-8', 'col-xs-12']),
+        ('Editorial', 'https://www.madhyamam.com/opinion/editorial', ['col-xs-12']),
+        ('Articles', 'https://www.madhyamam.com/opinion/articles', ['col-xs-12', 'col-lg-12 col-md-12 col-sm-12 col-xs-6', 'col-lg-12 col-md-12 col-sm-12 col-xs-10']),
+    ]
+
+    def getNewsDate(self, newsURL):
+        '''
+        To get the date published for the article.
+        '''
+        tree = html.parse(urlopen(newsURL))
+        divTime = tree.xpath("//div[@class='time']")
+        for child in divTime[0]:
+            if (child.tag == 'span') and (child.get('class') == 'glyphicon glyphicon-time'):
+                timeHTML = etree.tostring(child, pretty_print=True)
+                timePart = timeHTML.split('>')[1].strip()
+                timePart = timePart.split(' ')[0]
+        divDate = tree.xpath("//div[@class='date']")
+        for child in divDate[0]:
+            if (child.tag == 'span') and (child.get('class') == 'glyphicon glyphicon-calendar'):
+                dateHTML = etree.tostring(child, pretty_print=True)
+                datePart = dateHTML.split('>')[1].strip()
+        newsDateStr = datePart + " " + timePart
+        newsDate = datetime.strptime(newsDateStr, self.article_timefmt)
+        return([newsDate, newsDateStr])
+    
+    def parse_index_URL(self, indexURL):
+        '''
+        For the section, get the articles
+        '''
+        feed_title = indexURL[0]
+        articles = []
+        tree = html.parse(urlopen(indexURL[1]))
+        xpath_str = ''
+        for style in indexURL[2]:
+            xpath_str = xpath_str + "' or @class='" + style
+        xpath_str = xpath_str[5:]
+        xpath_str = '//div[' + xpath_str
+        xpath_str = xpath_str + "']"
+        for indx, div in enumerate(tree.xpath(xpath_str)):
+            article = {}
+            for divChild in div:
+                if (divChild.tag == "a") and (divChild.text != None):
+                    article['title'] = divChild.text
+                    article['url'] = divChild.get("href")
+                    articleDt = self.getNewsDate('https://www.madhyamam.com/' + divChild.get("href"))
+                    article['date'] = u'[' + articleDt[1] + ']'
+                    article['description'] = ''
+                    article['content'] = ''
+                    # the oldest_article setting doesn't work. The if part is a hack to get it working
+                    if articleDt[0] >= (datetime.now() - timedelta(days=self.oldest_article)):
+                        articles.append(article)
+
+        return (feed_title, articles)
+
+    def parse_index(self):
+        try:
+            ans = []
+            for indexURL in self.indexURLs:
+                ans.append(self.parse_index_URL(indexURL))
+        except:
+            print('Error processing feed: %s' % indexURL[0])
+            
+        return ans
+
+    def print_version(self, url):
+        url_split = url.split('/')
+        return ('https://www.madhyamam.com/print/' + url_split[-1])
